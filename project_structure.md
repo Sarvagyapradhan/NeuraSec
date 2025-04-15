@@ -1,0 +1,22 @@
+
+/app
+  /dashboard
+  /email-analyzer
+  /url-analyzer
+  /file-analyzer
+  /threat-analyzer
+  /threat-intelligence
+  /leaderboard
+  /rewards
+  /profile
+  /api
+/prisma
+  schema.prisma
+/components
+  /ui
+  Navbar.tsx
+  Sidebar.tsx
+  ProfileDropdown.tsx
+/lib
+  auth.ts
+  db.ts

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ccc;
+            padding: 20px;
+            border-radius: 5px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .response {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+        .success {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Test Login API</h2>
+        <div class="form-group">
+            <label for="username">Email:</label>
+            <input type="text" id="username" name="username" value="test@example.com">
+        </div>
+        <div class="form-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" value="password123">
+        </div>
+        <div class="form-group">
+            <button onclick="testLogin()">Test Login</button>
+        </div>
+        <div id="response" class="response"></div>
+    </div>
+
+    <script>
+        async function testLogin() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const responseElement = document.getElementById('response');
+            
+            // Clear previous response
+            responseElement.innerHTML = 'Sending request...';
+            responseElement.className = 'response';
+            
+            try {
+                // Create URL-encoded form data
+                const formData = new URLSearchParams();
+                formData.append('username', username);
+                formData.append('password', password);
+                
+                console.log('Sending login request with:', {
+                    username,
+                    password: '*'.repeat(password.length)
+                });
+                
+                // Make the API request
+                const response = await fetch('http://localhost:8000/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: formData
+                });
+                
+                // Parse the JSON response
+                const data = await response.json();
+                
+                // Display the response
+                if (response.ok) {
+                    responseElement.className = 'response success';
+                    responseElement.innerHTML = `
+                        <strong>Success (${response.status}):</strong>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                        <p>Check backend console for OTP code</p>
+                    `;
+                } else {
+                    responseElement.className = 'response error';
+                    responseElement.innerHTML = `
+                        <strong>Error (${response.status}):</strong>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                responseElement.className = 'response error';
+                responseElement.textContent = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html> 
