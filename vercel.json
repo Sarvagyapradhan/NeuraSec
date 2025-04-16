@@ -1,29 +1,24 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
-  "devCommand": "npm run dev",
-  "installCommand": "npm install",
-  "framework": "nextjs",
-  "outputDirectory": ".next",
-  "env": {
-    "NEXT_PUBLIC_APP_URL": "https://project-neurasec.vercel.app",
-    "NEXT_PUBLIC_API_URL": "https://project-neurasec.vercel.app",
-    "NODE_ENV": "production"
-  },
-  "routes": [
+  "builds": [
     {
-      "src": "/api/(.*)",
-      "dest": "/api/$1",
-      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-      "headers": {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-        "Access-Control-Allow-Headers": "X-Requested-With, Content-Type, Authorization"
-      }
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
+      "src": "package.json",
+      "use": "@vercel/next"
     }
-  ]
+  ],
+  "build": {
+    "env": {
+      "PRISMA_CLI_BINARY_TARGETS": "native,rhel-openssl-1.0.x"
+    }
+  },
+  "env": {
+    "NEXT_PUBLIC_API_URL": "https://neurasec-api.vercel.app",
+    "JWT_SECRET": "@jwt_secret"
+  },
+  "functions": {
+    "src/app/**/*": {
+      "memory": 512,
+      "maxDuration": 30
+    }
+  }
 } 
