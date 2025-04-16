@@ -4,25 +4,22 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import axios from "axios";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/use-toast";
-import { setCookie, deleteCookie } from "cookies-next";
+import { setCookie, getCookie, deleteCookie } from "cookies-next";
 
 interface User {
-  id: number;
+  id: string;
   email: string;
-  username?: string;
-  full_name?: string;
-  profile_picture?: string;
-  role: string;
+  username: string;
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (emailOrUsername: string, password: string, useOtp?: boolean) => Promise<void>;
+  login: (emailOrUsername: string, password: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
   token: string | null;
-  setAuthToken: (newToken: string) => void;
+  refreshAuth: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -32,7 +29,7 @@ const AuthContext = createContext<AuthContextType>({
   logout: () => {},
   isAuthenticated: false,
   token: null,
-  setAuthToken: () => {},
+  refreshAuth: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -48,165 +45,217 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const router = useRouter();
   const { toast } = useToast();
 
-  // Check if user is logged in
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const storedToken = localStorage.getItem("auth_token");
-        console.log("Authentication check - token exists:", !!storedToken);
-        
-        if (storedToken) {
-          setToken(storedToken);
-          
-          // Configure axios with auth header
-          axios.defaults.headers.common["Authorization"] = `Bearer ${storedToken}`;
-          console.log("Set Authorization header for API requests");
-          
-          try {
-            // Fetch user profile
-            console.log("Fetching user profile from API...");
-            const response = await axios.get("/api/auth/me");
-            console.log("User profile received:", response.data?.email);
-            
-            // Set user data
-            setUser(response.data);
-            
-            // Set cookie for server-side auth checks
-            setCookie("auth_token", storedToken, { 
-              maxAge: 60 * 60 * 24 * 7, // 7 days
-              path: "/",
-              sameSite: "strict",
-              secure: process.env.NODE_ENV === "production"
-            });
-            
-            console.log("Authentication successful, user state updated");
-          } catch (error) {
-            console.error("Authentication error - Failed to fetch user profile:", error);
-            // Clear invalid auth data
-            localStorage.removeItem("auth_token");
-            deleteCookie("auth_token");
-            setToken(null);
-          }
-        } else {
-          console.log("No authentication token found in localStorage");
-        }
-      } catch (error) {
-        console.error("Unexpected authentication error:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    checkAuth();
-  }, []);
-  
-  // Login function with option for OTP or direct login
-  const login = async (emailOrUsername: string, password: string, useOtp = false) => {
+  // Refresh auth function to be called when needed
+  const refreshAuth = async () => {
     try {
       setLoading(true);
+      console.log("[AuthProvider] Refreshing authentication state");
       
-      if (useOtp) {
-        // Original OTP-based login flow
-        // Create form data for OAuth2
-        const formData = new FormData();
-        formData.append("username", emailOrUsername);
-        formData.append("password", password);
+      // First try to get from cookie (set by server, more secure)
+      let authToken = getCookie("auth_token") as string | undefined;
+      
+      // Log the token source and status
+      if (authToken) {
+        console.log("[AuthProvider] Found token in cookie");
+      }
+      
+      // If not in cookie, try localStorage (for client-side login)
+      if (!authToken) {
+        authToken = typeof window !== 'undefined' ? localStorage.getItem("auth_token") : null;
         
-        const response = await axios.post("/api/auth/login", formData);
-        
-        if (response.data) {
-          toast({
-            title: "Login initiated",
-            description: "Please check your email for the verification code",
+        if (authToken) {
+          console.log("[AuthProvider] Found token in localStorage");
+          
+          // If found in localStorage but not in cookie, sync them
+          console.log("[AuthProvider] Syncing localStorage token to cookie");
+          setCookie("auth_token", authToken, {
+            maxAge: 60 * 60 * 24 * 7, // 7 days
+            httpOnly: false, // Allow JS access for our auth provider
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict"
           });
-          
-          // Store email in session storage for verify page
-          sessionStorage.setItem("verificationEmail", emailOrUsername);
-          
-          // Redirect to verify page
-          router.push("/verify?mode=login");
-        }
-      } else {
-        // Direct login without OTP
-        // Ensure properly encoded form data
-        const data = `username=${encodeURIComponent(emailOrUsername)}&password=${encodeURIComponent(password)}`;
-        
-        const response = await axios.post("/api/auth/direct-login", data, {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
-          }
-        });
-        
-        if (response.data?.access_token) {
-          // Store the JWT token
-          setAuthToken(response.data.access_token);
-          
-          // Fetch user data if not included in response
-          if (!response.data.user) {
-            const userResponse = await axios.get("/api/auth/me");
-            setUser(userResponse.data);
-          } else {
-            setUser(response.data.user);
-          }
-          
-          toast({
-            title: "Login successful",
-            description: "You have been logged in successfully",
-          });
-          
-          // Use window.location for a hard refresh to ensure auth state is updated
-          window.location.href = "/dashboard";
-          return;
         }
       }
-    } catch (error: any) {
-      console.error("Login error:", error);
-      toast({
-        title: "Login failed",
-        description: error.response?.data?.detail || "Invalid credentials",
-        variant: "destructive",
-      });
+      
+      if (authToken) {
+        console.log("[AuthProvider] Setting up authorization header");
+        setToken(authToken);
+        
+        // Configure axios with auth header
+        axios.defaults.headers.common["Authorization"] = `Bearer ${authToken}`;
+        
+        try {
+          // First check if token is valid
+          console.log("[AuthProvider] Checking token validity");
+          const checkResponse = await fetch(`/api/auth/check-token?token=${encodeURIComponent(authToken)}`, {
+            headers: {
+              "Authorization": `Bearer ${authToken}`
+            }
+          });
+          
+          const checkResult = await checkResponse.json();
+          
+          if (!checkResponse.ok || !checkResult.valid) {
+            console.error("[AuthProvider] Token validation failed:", checkResult);
+            throw new Error(`Token validation failed: ${checkResult.reason || "Invalid token"}`);
+          }
+          
+          // If token is valid and we have user data, use it
+          if (checkResult.user) {
+            console.log("[AuthProvider] Setting user from token validation");
+            setUser(checkResult.user);
+            return; // Exit early since we have the user data
+          }
+          
+          // If no user in check result, fetch user profile
+          console.log("[AuthProvider] Fetching user profile");
+          const response = await fetch("/api/auth/me", {
+            headers: {
+              "Authorization": `Bearer ${authToken}`
+            }
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to fetch user profile: ${response.statusText}`);
+          }
+          
+          const userData = await response.json();
+          console.log("[AuthProvider] User profile fetched successfully");
+          setUser(userData);
+        } catch (profileError) {
+          console.error("[AuthProvider] Failed to fetch user profile:", profileError);
+          
+          // Clear invalid auth data
+          localStorage.removeItem("auth_token");
+          deleteCookie("auth_token");
+          setToken(null);
+          setUser(null);
+          
+          // Redirect to login if we're on a protected page
+          if (typeof window !== 'undefined' && 
+              (window.location.pathname.startsWith('/dashboard') || 
+               window.location.pathname.startsWith('/admin'))) {
+            router.push('/login');
+          }
+        }
+      } else {
+        console.log("[AuthProvider] No auth token found");
+        // Ensure user and token state are cleared
+        setUser(null);
+        setToken(null);
+      }
+    } catch (error) {
+      console.error("[AuthProvider] Auth refresh error:", error);
     } finally {
       setLoading(false);
     }
   };
-  
-  // Update token when authentication is successful
-  const setAuthToken = (newToken: string) => {
-    // Save token to localStorage
-    localStorage.setItem("auth_token", newToken);
+
+  // Check if user is logged in on component mount
+  useEffect(() => {
+    refreshAuth();
     
-    // Save token to cookie for server-side checks
-    setCookie("auth_token", newToken, { 
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: "/",
-      sameSite: "strict",
-      secure: process.env.NODE_ENV === "production"
-    });
+    // Add event listener to refresh auth on storage changes (for multi-tab support)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'auth_token') {
+        console.log("[AuthProvider] Auth token changed in another tab, refreshing");
+        refreshAuth();
+      }
+    };
     
-    // Update state
-    setToken(newToken);
-    
-    // Set default authorization header
-    axios.defaults.headers.common["Authorization"] = `Bearer ${newToken}`;
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', handleStorageChange);
+      return () => window.removeEventListener('storage', handleStorageChange);
+    }
+  }, []);
+
+  const login = async (emailOrUsername: string, password: string) => {
+    try {
+      console.log("[AuthProvider] Attempting login with:", emailOrUsername);
+      
+      const response = await axios.post("/api/auth/login", {
+        emailOrUsername,
+        password,
+      });
+      
+      console.log("[AuthProvider] Login response received:", response.status);
+
+      // Extract token and user data from response
+      const { token, user } = response.data;
+
+      if (!token) {
+        console.error("[AuthProvider] No token received in login response");
+        throw new Error("Authentication failed - no token received");
+      }
+
+      // Store token in localStorage for persistence
+      localStorage.setItem("auth_token", token);
+      console.log("[AuthProvider] Token stored in localStorage");
+      
+      // Also ensure cookie is set
+      setCookie("auth_token", token, {
+        maxAge: 60 * 60 * 24 * 7, // 7 days
+        httpOnly: false, // Allow JS access
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        path: "/"
+      });
+      console.log("[AuthProvider] Token stored in cookie");
+
+      // Update state
+      setToken(token);
+      
+      // Set user data if available
+      if (user) {
+        setUser(user);
+        console.log("[AuthProvider] User data set:", user.email);
+      }
+
+      // Configure axios
+      axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+      console.log("[AuthProvider] Set axios default Authorization header");
+
+      console.log("[AuthProvider] Login successful, user authenticated");
+      toast({
+        title: "Login successful",
+        description: "Welcome back!",
+      });
+      
+      // Wait just a moment before redirecting to ensure all state is updated
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Redirect to dashboard
+      console.log("[AuthProvider] Redirecting to dashboard...");
+      router.push("/dashboard");
+      
+      return;
+    } catch (error: any) {
+      console.error("[AuthProvider] Login error:", error);
+      throw error;
+    }
   };
-  
-  // Logout function
+
   const logout = () => {
+    console.log("[AuthProvider] Logging out...");
+    
+    // Clear auth data
     localStorage.removeItem("auth_token");
     deleteCookie("auth_token");
-    setUser(null);
     setToken(null);
-    delete axios.defaults.headers.common["Authorization"];
+    setUser(null);
     
+    // Clear Authorization header
+    delete axios.defaults.headers.common["Authorization"];
+
     toast({
       title: "Logged out",
       description: "You have been logged out successfully",
     });
-    
+
+    // Redirect to login
     router.push("/login");
   };
-  
+
   return (
     <AuthContext.Provider
       value={{
@@ -216,7 +265,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         logout,
         isAuthenticated: !!user,
         token,
-        setAuthToken,
+        refreshAuth,
       }}
     >
       {children}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
@@ -11,12 +11,27 @@ import { useToast } from "@/components/ui/use-toast";
 import { setCookie } from "cookies-next";
 import { useAuth } from "@/components/AuthProvider";
 
-export default function VerifyPage() {
+export default function VerifyPageWrapper() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <div className="text-center p-8">
+          <h1 className="text-2xl font-bold mb-4">Loading...</h1>
+          <p className="text-gray-600">Please wait...</p>
+        </div>
+      </div>
+    }>
+      <VerifyPage />
+    </Suspense>
+  );
+}
+
+function VerifyPage() {
   const { toast } = useToast();
   const router = useRouter();
   const searchParams = useSearchParams();
   const mode = searchParams.get("mode") || "login";
-  const { setAuthToken } = useAuth();
+  const { refreshAuth } = useAuth();
   
   const [formData, setFormData] = useState({
     email: "",
@@ -84,8 +99,25 @@ export default function VerifyPage() {
       console.log("Verification response:", response.data);
       
       if (response.data?.access_token) {
-        // Store the JWT token using the context's setAuthToken
-        setAuthToken(response.data.access_token);
+        const token = response.data.access_token;
+        
+        // Store the JWT token in localStorage
+        localStorage.setItem("auth_token", token);
+        console.log("Stored token in localStorage");
+
+        // Set the auth token cookie
+        setCookie("auth_token", token, {
+          maxAge: 60 * 60 * 24 * 7, // 7 days
+          httpOnly: false, // Allow JS access as needed by AuthProvider
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "strict",
+          path: "/"
+        });
+        console.log("Set auth_token cookie");
+
+        // Refresh the authentication state using the new token
+        await refreshAuth(); 
+        console.log("Auth state refreshed");
         
         toast({
           title: mode === "register" ? "Registration complete" : "Login successful",
@@ -96,7 +128,16 @@ export default function VerifyPage() {
         sessionStorage.removeItem("verificationEmail");
         
         // Redirect to dashboard
+        console.log("Redirecting to dashboard...");
         router.push("/dashboard");
+      } else {
+        // Handle cases where token is not in response, maybe throw error or specific toast
+        console.error("No access_token found in verification response");
+        toast({
+            title: "Verification incomplete",
+            description: "Authentication successful, but no access token received.",
+            variant: "warning", 
+        });
       }
     } catch (error: any) {
       console.error("Verification error:", error);

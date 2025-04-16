@@ -1,51 +1,74 @@
 import { NextRequest, NextResponse } from "next/server";
-import axios from "axios";
+import { verifyToken } from "@/lib/auth";
+import jwt from 'jsonwebtoken';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function GET(request: NextRequest) {
   try {
-    // Get the auth token from the request
+    // First try to get token from Authorization header
+    let token = null;
     const authHeader = request.headers.get("Authorization");
     
-    if (!authHeader) {
+    if (authHeader?.startsWith("Bearer ")) {
+      token = authHeader.split(" ")[1];
+      console.log("[me] Found token in Authorization header");
+    }
+    
+    // If not found in header, try cookies
+    if (!token) {
+      token = request.cookies.get("auth_token")?.value;
+      if (token) {
+        console.log("[me] Found token in cookies");
+      }
+    }
+    
+    // If still no token, return unauthorized
+    if (!token) {
+      console.log("[me] No authentication token provided");
       return NextResponse.json(
-        { detail: "Authentication credentials were not provided" },
+        { error: "No authentication token provided" },
+        { status: 401 }
+      );
+    }
+    
+    // Try to decode the token without verification for debugging
+    try {
+      const decodedDebug = jwt.decode(token);
+      console.log("Token payload:", decodedDebug);
+      
+      // Check if token is expired
+      const exp = (decodedDebug as any)?.exp;
+      if (exp) {
+        const now = Math.floor(Date.now() / 1000);
+        console.log(`Token expiration: ${new Date(exp * 1000).toISOString()}, now: ${new Date(now * 1000).toISOString()}`);
+        console.log(`Token ${exp < now ? 'is expired' : 'is valid'}`);
+      }
+    } catch (decodeError) {
+      console.log("Error decoding token:", decodeError);
+    }
+    
+    console.log("[me] Verifying user token");
+    const user = await verifyToken(token);
+
+    if (!user) {
+      console.log("[me] Invalid or expired token");
+      return NextResponse.json(
+        { error: "Invalid or expired token" },
         { status: 401 }
       );
     }
 
-    console.log("[/api/auth/me] Received request with auth token");
-    
-    try {
-      // Forward the request to the backend
-      const response = await axios.get(`${API_URL}/api/auth/me`, {
-        headers: {
-          Authorization: authHeader
-        }
-      });
-      
-      console.log("[/api/auth/me] Backend response successful");
-      
-      // Return the response data
-      return NextResponse.json(response.data);
-    } catch (error: any) {
-      console.error("[/api/auth/me] Backend request failed:", {
-        status: error.response?.status,
-        data: error.response?.data
-      });
-      
-      // Return the error response
-      return NextResponse.json(
-        error.response?.data || { detail: "Failed to fetch user data" },
-        { status: error.response?.status || 500 }
-      );
-    }
-  } catch (error: any) {
-    console.error("[/api/auth/me] Fatal error:", error);
-    
+    console.log("[me] User authenticated successfully:", user.email);
+    return NextResponse.json({
+      id: user.id,
+      email: user.email,
+      username: user.username
+    });
+  } catch (error) {
+    console.error("[me] Profile fetch error:", error);
     return NextResponse.json(
-      { detail: "Internal server error" },
+      { error: "Failed to fetch user profile" },
       { status: 500 }
     );
   }

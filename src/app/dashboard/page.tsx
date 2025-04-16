@@ -1,8 +1,9 @@
 "use client";
 
 import { useAuth } from "@/components/AuthProvider";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { getCookie } from "cookies-next";
 
 import {
   Activity,
@@ -118,18 +119,48 @@ const quickTools = [
 
 export default function DashboardPage() {
   const { user, loading, isAuthenticated } = useAuth();
+  const [authState, setAuthState] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const router = useRouter();
-  
+
+  // Check authentication on load
   useEffect(() => {
-    // Check if user is authenticated after loading is complete
-    if (!loading && !isAuthenticated) {
-      console.log("User not authenticated, redirecting to login");
-      router.push("/login");
-    }
+    const checkAuthStatus = () => {
+      console.log("Dashboard checking auth state");
+      
+      // Check for token in cookie directly (faster than waiting for useAuth)
+      const cookieToken = getCookie("auth_token");
+      const localToken = typeof window !== 'undefined' ? localStorage.getItem("auth_token") : null;
+      
+      console.log("Auth tokens:", { 
+        cookieExists: !!cookieToken, 
+        localStorageExists: !!localToken,
+        authContextLoading: loading,
+        authContextAuthenticated: isAuthenticated
+      });
+      
+      // If we have a token in either cookie or localStorage, consider authenticated
+      if (cookieToken || localToken) {
+        console.log("Token found, setting authenticated state");
+        setAuthState('authenticated');
+        return;
+      }
+      
+      // If authContext is done loading and says not authenticated
+      if (!loading && !isAuthenticated) {
+        console.log("No auth token found and context says not authenticated");
+        setAuthState('unauthenticated');
+        router.push("/login");
+      } else if (!loading && isAuthenticated) {
+        console.log("Auth context says authenticated");
+        setAuthState('authenticated');
+      }
+    };
+    
+    checkAuthStatus();
   }, [loading, isAuthenticated, router]);
   
-  // Show loading state while checking authentication
-  if (loading) {
+  // Show loading state
+  if (authState === 'loading') {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
@@ -140,11 +171,12 @@ export default function DashboardPage() {
     );
   }
   
-  // If not authenticated and not loading, don't render the dashboard content
-  if (!isAuthenticated) {
+  // If definitely not authenticated, return null (will be redirected by useEffect)
+  if (authState === 'unauthenticated') {
     return null;
   }
 
+  // Main dashboard content
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-slate-950 to-slate-900">
       <AnimatedBackground className="relative z-10">

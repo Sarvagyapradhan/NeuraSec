@@ -1,88 +1,109 @@
-import { NextRequest, NextResponse } from "next/server";
-import axios from "axios";
+import { NextRequest, NextResponse } from 'next/server';
+import { validateUser, generateToken } from '@/lib/auth';
+import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
+// This is a fixed local login route that works with either our local auth or the backend API
 export async function POST(request: NextRequest) {
   try {
-    // Check content type
-    const contentType = request.headers.get("content-type") || "";
-    console.log("Received request with content type:", contentType);
+    const body = await request.json();
+    console.log('Login attempt with data:', { ...body, password: body.password ? '[REDACTED]' : undefined });
     
-    let data;
+    // Extract username and password from the request
+    const username = body.username || body.emailOrUsername || body.email;
+    const password = body.password;
     
-    // Handle form-urlencoded data - this is the format we need
-    if (contentType.includes("application/x-www-form-urlencoded")) {
-      // Get the raw text of the request
-      data = await request.text();
-      console.log("Received form data:", data);
-    } 
-    // Handle FormData
-    else if (contentType.includes("multipart/form-data")) {
-      const formData = await request.formData();
-      // Create urlencoded string manually
-      const username = formData.get("username") || formData.get("email");
-      const password = formData.get("password");
-      data = `username=${encodeURIComponent(username?.toString() || "")}&password=${encodeURIComponent(password?.toString() || "")}`;
-      console.log("Converted form data:", data);
-    } 
-    // Handle JSON
-    else {
-      try {
-        const jsonData = await request.json();
-        console.log("Received JSON data:", jsonData);
-        
-        // Extract email/username and password
-        const username = jsonData.username || jsonData.email;
-        const password = jsonData.password;
-        
-        if (username && password) {
-          // Create urlencoded string manually
-          data = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
-          console.log("Converted JSON to form data:", data);
-        } else {
-          throw new Error("Missing username or password in JSON data");
-        }
-      } catch (parseError) {
-        console.error("Failed to parse request body:", parseError);
-        return NextResponse.json(
-          { detail: "Invalid request format" },
-          { status: 400 }
-        );
-      }
-    }
-    
-    // Set headers
-    const headers = {
-      'Content-Type': 'application/x-www-form-urlencoded'
-    };
-    
-    console.log(`Sending request to ${API_URL}/api/auth/login`);
-    
-    try {
-      // Send request to the backend
-      const response = await axios.post(`${API_URL}/api/auth/login`, data, { headers });
-      console.log("Backend response:", response.status, response.data);
-      
-      // Return the response data
-      return NextResponse.json(response.data);
-    } catch (error: any) {
-      console.error("Backend request failed:", {
-        status: error.response?.status,
-        data: error.response?.data
-      });
-      
-      // Return the error response
+    if (!username || !password) {
       return NextResponse.json(
-        error.response?.data || { detail: "Login failed" },
-        { status: error.response?.status || 500 }
+        { error: 'Username and password are required' },
+        { status: 400 }
       );
     }
-  } catch (error: any) {
-    console.error("Fatal error in login route:", error);
     
+    // First try direct validation with local auth
+    try {
+      console.log('Attempting local authentication...');
+      const user = await validateUser(username, password);
+      
+      if (user) {
+        console.log('Local authentication successful for user:', user.email);
+        // Generate JWT token
+        const token = generateToken(user);
+        
+        // Set HTTP-only cookie with the token
+        const response = NextResponse.json({
+          message: 'Login successful',
+          user: {
+            id: user.id,
+            email: user.email,
+            username: user.username,
+          },
+          token,
+        });
+        
+        response.cookies.set('auth_token', token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'strict',
+          maxAge: 60 * 60 * 24 * 7, // 7 days
+        });
+        
+        return response;
+      }
+    } catch (localAuthError) {
+      console.error('Local auth error:', localAuthError);
+      // Continue to try backend auth if local auth fails
+    }
+    
+    // If local auth fails, try the backend direct login
+    console.log('Attempting backend authentication...');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    
+    try {
+      const backendResponse = await axios.post(
+        `${apiUrl}/api/auth/direct-login`,
+        `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+        }
+      );
+      
+      console.log('Backend auth response:', backendResponse.status);
+      
+      if (backendResponse.data && backendResponse.data.access_token) {
+        console.log('Backend authentication successful');
+        
+        // Create a response with the token
+        const response = NextResponse.json({
+          message: 'Login successful',
+          token: backendResponse.data.access_token,
+        });
+        
+        // Set the auth token cookie
+        response.cookies.set('auth_token', backendResponse.data.access_token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'strict',
+          maxAge: 60 * 60 * 24 * 7, // 7 days
+        });
+        
+        return response;
+      }
+    } catch (backendError) {
+      console.error('Backend auth error:', backendError.message);
+      // Handle backend errors
+    }
+    
+    // If both authentication methods fail, return error
     return NextResponse.json(
-      { detail: "Internal server error" },
+      { error: 'Invalid credentials' },
+      { status: 401 }
+    );
+  } catch (error) {
+    console.error('Login error:', error);
+    return NextResponse.json(
+      { error: 'Failed to log in' },
       { status: 500 }
     );
   }

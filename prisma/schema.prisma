@@ -15,8 +15,9 @@ datasource db {
 
 model User {
   id          String            @id @default(cuid())
-  clerkId     String            @unique
   email       String            @unique
+  password    String            // Added for email-based auth
+  username    String            @unique // Added for username login
   scans       Scan[]
   reports     Report[]
   leaderboard LeaderboardEntry?
